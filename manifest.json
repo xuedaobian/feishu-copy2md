@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "HTML Area to Markdown",
+  "version": "1.0",
+  "description": "Converts a specific HTML area on a page to Markdown and copies it.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "clipboardWrite",
+    "clipboardRead",
+    "offscreen"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.feishu.cn/docx/*"],
+      "js": ["turndown.js", "content.js"]
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "host_permissions": [
+    "*://*.feishu.cn/*"
+  ]
+}
