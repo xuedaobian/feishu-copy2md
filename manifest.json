@@ -15,8 +15,12 @@
   },
   "content_scripts": [
     {
-      "matches": ["*://*.feishu.cn/docx/*"],
-      "js": ["turndown.js", "content.js"]
+      "matches": ["*://*.feishu.cn/*"],
+      "js": [
+        "codeFormatter.js",
+        "turndown.js",
+        "content.js"
+      ]
     }
   ],
   "action": {

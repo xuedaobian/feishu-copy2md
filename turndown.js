@@ -1,7 +1,25 @@
 var TurndownService = (function () {
   'use strict';
 
-  function extend (destination) {
+  // Load the code formatter
+  var codeFormatter;
+  if (typeof require !== 'undefined') {
+    // Node.js environment
+    codeFormatter = require('./codeFormatter.js');
+  } else if (typeof window !== 'undefined' && window.codeFormatter) {
+    // Browser environment with script loaded
+    codeFormatter = window.codeFormatter;
+  } else {
+    // Fallback with empty implementation
+    codeFormatter = {
+      applyLanguageIndentation: function(code) { return code; },
+      extractCodeFromFeishu: function() { return ''; },
+      extractCodeFromStandard: function(node) { return node ? node.textContent : ''; }
+    };
+    console.warn('CodeFormatter not loaded. Code indentation features will be limited.');
+  }
+
+  function extend(destination) {
     for (var i = 1; i < arguments.length; i++) {
       var source = arguments[i];
       for (var key in source) {
@@ -11,15 +29,15 @@ var TurndownService = (function () {
     return destination
   }
 
-  function repeat (character, count) {
+  function repeat(character, count) {
     return Array(count + 1).join(character)
   }
 
-  function trimLeadingNewlines (string) {
+  function trimLeadingNewlines(string) {
     return string.replace(/^\n*/, '')
   }
 
-  function trimTrailingNewlines (string) {
+  function trimTrailingNewlines(string) {
     // avoid match-at-end regexp bottleneck, see #370
     var indexEnd = string.length;
     while (indexEnd > 0 && string[indexEnd - 1] === '\n') indexEnd--;
@@ -35,8 +53,17 @@ var TurndownService = (function () {
     'TFOOT', 'TH', 'THEAD', 'TR', 'UL'
   ];
 
-  function isBlock (node) {
-    return is(node, blockElements)
+  // Special handling for Feishu document elements
+  var feishuBlockElements = {
+    'DOCX-TEXT-BLOCK': true,
+    'DOCX-CODE-BLOCK': true,
+    'ROOT-RENDER-UNIT-CONTAINER': true
+  };
+
+  function isBlock(node) {
+    return is(node, blockElements) || 
+           (node.nodeName && feishuBlockElements[node.nodeName]) ||
+           (node.classList && node.classList.contains('docx-text-block'))
   }
 
   var voidElements = [
@@ -44,11 +71,11 @@ var TurndownService = (function () {
     'KEYGEN', 'LINK', 'META', 'PARAM', 'SOURCE', 'TRACK', 'WBR'
   ];
 
-  function isVoid (node) {
+  function isVoid(node) {
     return is(node, voidElements)
   }
 
-  function hasVoid (node) {
+  function hasVoid(node) {
     return has(node, voidElements)
   }
 
@@ -57,19 +84,19 @@ var TurndownService = (function () {
     'AUDIO', 'VIDEO'
   ];
 
-  function isMeaningfulWhenBlank (node) {
+  function isMeaningfulWhenBlank(node) {
     return is(node, meaningfulWhenBlankElements)
   }
 
-  function hasMeaningfulWhenBlank (node) {
+  function hasMeaningfulWhenBlank(node) {
     return has(node, meaningfulWhenBlankElements)
   }
 
-  function is (node, tagNames) {
+  function is(node, tagNames) {
     return tagNames.indexOf(node.nodeName) >= 0
   }
 
-  function has (node, tagNames) {
+  function has(node, tagNames) {
     return (
       node.getElementsByTagName &&
       tagNames.some(function (tagName) {
@@ -180,16 +207,31 @@ var TurndownService = (function () {
     filter: function (node, options) {
       return (
         options.codeBlockStyle === 'fenced' &&
-        node.nodeName === 'PRE' &&
-        node.firstChild &&
-        node.firstChild.nodeName === 'CODE'
+        (
+          (node.nodeName === 'PRE' && node.firstChild && node.firstChild.nodeName === 'CODE') || // Standard
+          (node.nodeName === 'DIV' && node.classList.contains('docx-code-block')) // Feishu specific
+        )
       )
     },
 
     replacement: function (content, node, options) {
-      var className = node.firstChild.getAttribute('class') || '';
-      var language = (className.match(/language-(\S+)/) || [null, ''])[1];
-      var code = node.firstChild.textContent;
+      var languageNode = node.querySelector('.code-block-header-btn span');
+      var language = languageNode ? languageNode.textContent.toLowerCase() : '';
+      if (language === 'plaintext') language = '';
+
+      var codeLinesContainer = node.querySelector('.zone-container.code-block-zone-container');
+      var code = '';
+
+      if (codeLinesContainer) {
+        // Use the code formatter to extract and format code from Feishu blocks
+        code = codeFormatter.extractCodeFromFeishu(codeLinesContainer, language);
+      } else {
+        var codeNode = node.querySelector('code') || node;
+        // Use the code formatter to extract and format code from standard blocks
+        code = codeFormatter.extractCodeFromStandard(codeNode, language);
+      }
+
+      code = code.replace(/\u200b/g, '');
 
       var fenceChar = options.fence.charAt(0);
       var fenceSize = 3;
@@ -206,7 +248,7 @@ var TurndownService = (function () {
 
       return (
         '\n\n' + fence + language + '\n' +
-        code.replace(/\n$/, '') +
+        code +
         '\n' + fence + '\n\n'
       )
     }
@@ -336,15 +378,72 @@ var TurndownService = (function () {
     }
   };
 
-  function cleanAttribute (attribute) {
+  // Add a special rule for Feishu text blocks
+  rules.feishuTextBlock = {
+    filter: function(node) {
+      return node.classList && node.classList.contains('docx-text-block');
+    },
+
+    replacement: function(content, node, options) {
+      // Check if this is an empty paragraph (has isEmpty class)
+      if (node.classList.contains('isEmpty')) {
+        return '\n\n';
+      }
+      
+      // If it has content, treat it as a regular paragraph
+      content = content.trim();
+      return content ? '\n\n' + content + '\n\n' : '\n\n'
+    }
+  };
+
+  function cleanAttribute(attribute) {
     return attribute ? attribute.replace(/(\n+\s*)+/g, '\n') : ''
+  }
+
+  /**
+   * Special processing for Feishu documents
+   */
+  function processFeishuDocument(element) {
+    // Process all text blocks in the document
+    const textBlocks = element.querySelectorAll('.docx-text-block');
+    let documentContent = '';
+    
+    textBlocks.forEach((block, index) => {
+      let blockContent = '';
+      
+      // Handle empty paragraphs
+      if (block.classList.contains('isEmpty')) {
+        blockContent = '\n\n';
+      } else {
+        // Extract the text content from the block
+        const textZone = block.querySelector('.zone-container');
+        if (textZone) {
+          const lines = textZone.querySelectorAll('.ace-line');
+          const lineTexts = Array.from(lines).map(line => line.textContent || '');
+          blockContent = lineTexts.join(' ');
+        } else {
+          blockContent = block.textContent || '';
+        }
+        
+        // Wrap non-empty content in paragraph markers
+        if (blockContent.trim()) {
+          blockContent = '\n\n' + blockContent.trim() + '\n\n';
+        } else {
+          blockContent = '\n\n';
+        }
+      }
+      
+      documentContent += blockContent;
+    });
+    
+    return documentContent;
   }
 
   /**
    * Manages a collection of rules used to convert HTML to Markdown
    */
 
-  function Rules (options) {
+  function Rules(options) {
     this.options = options;
     this._keep = [];
     this._remove = [];
@@ -400,7 +499,7 @@ var TurndownService = (function () {
     }
   };
 
-  function findRule (rules, node, options) {
+  function findRule(rules, node, options) {
     for (var i = 0; i < rules.length; i++) {
       var rule = rules[i];
       if (filterValue(rule, node, options)) return rule
@@ -408,7 +507,7 @@ var TurndownService = (function () {
     return void 0
   }
 
-  function filterValue (rule, node, options) {
+  function filterValue(rule, node, options) {
     var filter = rule.filter;
     if (typeof filter === 'string') {
       if (filter === node.nodeName.toLowerCase()) return true
@@ -453,7 +552,7 @@ var TurndownService = (function () {
    *
    * @param {Object} options
    */
-  function collapseWhitespace (options) {
+  function collapseWhitespace(options) {
     var element = options.element;
     var isBlock = options.isBlock;
     var isVoid = options.isVoid;
@@ -474,7 +573,7 @@ var TurndownService = (function () {
         var text = node.data.replace(/[ \r\n\t]+/g, ' ');
 
         if ((!prevText || / $/.test(prevText.data)) &&
-            !keepLeadingWs && text[0] === ' ') {
+          !keepLeadingWs && text[0] === ' ') {
           text = text.substr(1);
         }
 
@@ -528,7 +627,7 @@ var TurndownService = (function () {
    * @param {Node} node
    * @return {Node} node
    */
-  function remove (node) {
+  function remove(node) {
     var next = node.nextSibling || node.parentNode;
 
     node.parentNode.removeChild(node);
@@ -545,7 +644,7 @@ var TurndownService = (function () {
    * @param {Function} isPre
    * @return {Node}
    */
-  function next (prev, current, isPre) {
+  function next(prev, current, isPre) {
     if ((prev && prev.parentNode === current) || isPre(current)) {
       return current.nextSibling || current.parentNode
     }
@@ -563,7 +662,7 @@ var TurndownService = (function () {
    * Parsing HTML strings
    */
 
-  function canParseHTMLNatively () {
+  function canParseHTMLNatively() {
     var Parser = root.DOMParser;
     var canParse = false;
 
@@ -574,13 +673,13 @@ var TurndownService = (function () {
       if (new Parser().parseFromString('', 'text/html')) {
         canParse = true;
       }
-    } catch (e) {}
+    } catch (e) { }
 
     return canParse
   }
 
-  function createHTMLParser () {
-    var Parser = function () {};
+  function createHTMLParser() {
+    var Parser = function () { };
 
     {
       if (shouldUseActiveX()) {
@@ -605,7 +704,7 @@ var TurndownService = (function () {
     return Parser
   }
 
-  function shouldUseActiveX () {
+  function shouldUseActiveX() {
     var useActiveX = false;
     try {
       document.implementation.createHTMLDocument('').open();
@@ -617,7 +716,7 @@ var TurndownService = (function () {
 
   var HTMLParser = canParseHTMLNatively() ? root.DOMParser : createHTMLParser();
 
-  function RootNode (input, options) {
+  function RootNode(input, options) {
     var root;
     if (typeof input === 'string') {
       var doc = htmlParser().parseFromString(
@@ -642,16 +741,16 @@ var TurndownService = (function () {
   }
 
   var _htmlParser;
-  function htmlParser () {
+  function htmlParser() {
     _htmlParser = _htmlParser || new HTMLParser();
     return _htmlParser
   }
 
-  function isPreOrCode (node) {
+  function isPreOrCode(node) {
     return node.nodeName === 'PRE' || node.nodeName === 'CODE'
   }
 
-  function Node (node, options) {
+  function Node(node, options) {
     node.isBlock = isBlock(node);
     node.isCode = node.nodeName === 'CODE' || node.parentNode.isCode;
     node.isBlank = isBlank(node);
@@ -659,7 +758,7 @@ var TurndownService = (function () {
     return node
   }
 
-  function isBlank (node) {
+  function isBlank(node) {
     return (
       !isVoid(node) &&
       !isMeaningfulWhenBlank(node) &&
@@ -669,7 +768,7 @@ var TurndownService = (function () {
     )
   }
 
-  function flankingWhitespace (node, options) {
+  function flankingWhitespace(node, options) {
     if (node.isBlock || (options.preformattedCode && node.isCode)) {
       return { leading: '', trailing: '' }
     }
@@ -689,7 +788,7 @@ var TurndownService = (function () {
     return { leading: edges.leading, trailing: edges.trailing }
   }
 
-  function edgeWhitespace (string) {
+  function edgeWhitespace(string) {
     var m = string.match(/^(([ \t\r\n]*)(\s*))(?:(?=\S)[\s\S]*\S)?((\s*?)([ \t\r\n]*))$/);
     return {
       leading: m[1], // whole string for whitespace-only strings
@@ -701,7 +800,7 @@ var TurndownService = (function () {
     }
   }
 
-  function isFlankedByWhitespace (side, node, options) {
+  function isFlankedByWhitespace(side, node, options) {
     var sibling;
     var regExp;
     var isFlanked;
@@ -739,11 +838,10 @@ var TurndownService = (function () {
     [/\[/g, '\\['],
     [/\]/g, '\\]'],
     [/^>/g, '\\>'],
-    [/_/g, '\\_'],
     [/^(\d+)\. /g, '$1\\. ']
   ];
 
-  function TurndownService (options) {
+  function TurndownService(options) {
     if (!(this instanceof TurndownService)) return new TurndownService(options)
 
     var defaults = {
@@ -791,8 +889,21 @@ var TurndownService = (function () {
 
       if (input === '') return ''
 
-      var output = process.call(this, new RootNode(input, this.options));
-      return postProcess.call(this, output)
+      // Determine if this is likely a Feishu document by checking for docx-text-block elements
+      let isFeishuDoc = false;
+      if (typeof input !== 'string') {
+        if (input.querySelectorAll) {
+          isFeishuDoc = input.querySelectorAll('.docx-text-block').length > 0;
+        }
+      } else {
+        isFeishuDoc = input.includes('docx-text-block');
+      }
+
+      if (isFeishuDoc) {
+        return this.turndownFeishuDocument(input);
+      } else {
+        return originalTurndown.call(this, input);
+      }
     },
 
     /**
@@ -866,6 +977,36 @@ var TurndownService = (function () {
       return escapes.reduce(function (accumulator, escape) {
         return accumulator.replace(escape[0], escape[1])
       }, string)
+    },
+
+    /**
+     * Special method for processing Feishu documents
+     * @public
+     * @param {String|HTMLElement} input The string or DOM node to convert
+     * @returns A Markdown representation of the input
+     * @type String
+     */
+    turndownFeishuDocument: function(input) {
+      if (!canConvert(input)) {
+        throw new TypeError(
+          input + ' is not a string, or an element/document/fragment node.'
+        )
+      }
+
+      if (input === '') return '';
+
+      // Check if this is a Feishu document
+      const rootNode = new RootNode(input, this.options);
+      const isFeishuDoc = rootNode.querySelectorAll('.docx-text-block').length > 0;
+      
+      if (isFeishuDoc) {
+        // Use the special Feishu processing logic
+        return processFeishuDocument(rootNode);
+      } else {
+        // Use the regular turndown processing
+        var output = process.call(this, rootNode);
+        return postProcess.call(this, output);
+      }
     }
   };
 
@@ -877,14 +1018,24 @@ var TurndownService = (function () {
    * @type String
    */
 
-  function process (parentNode) {
+  function process(parentNode) {
     var self = this;
     return reduce.call(parentNode.childNodes, function (output, node) {
       node = new Node(node, self.options);
 
       var replacement = '';
       if (node.nodeType === 3) {
-        replacement = node.isCode ? node.nodeValue : self.escape(node.nodeValue);
+        var nodeValue = node.nodeValue.replace(/\u200b/g, '');
+        var isCodeContent = false;
+        var tempNode = node.parentNode;
+        while (tempNode && tempNode.nodeName !== 'BODY') {
+          if (rules.fencedCodeBlock.filter(tempNode, self.options)) {
+            isCodeContent = true;
+            break;
+          }
+          tempNode = tempNode.parentNode;
+        }
+        replacement = isCodeContent ? nodeValue : self.escape(nodeValue);
       } else if (node.nodeType === 1) {
         replacement = replacementForNode.call(self, node);
       }
@@ -901,7 +1052,7 @@ var TurndownService = (function () {
    * @type String
    */
 
-  function postProcess (output) {
+  function postProcess(output) {
     var self = this;
     this.rules.forEach(function (rule) {
       if (typeof rule.append === 'function') {
@@ -920,7 +1071,7 @@ var TurndownService = (function () {
    * @type String
    */
 
-  function replacementForNode (node) {
+  function replacementForNode(node) {
     var rule = this.rules.forNode(node);
     var content = process.call(this, node);
     var whitespace = node.flankingWhitespace;
@@ -941,7 +1092,7 @@ var TurndownService = (function () {
    * @type String
    */
 
-  function join (output, replacement) {
+  function join(output, replacement) {
     var s1 = trimTrailingNewlines(output);
     var s2 = trimLeadingNewlines(replacement);
     var nls = Math.max(output.length - s1.length, replacement.length - s2.length);
@@ -958,7 +1109,7 @@ var TurndownService = (function () {
    * @type String|Object|Array|Boolean|Number
    */
 
-  function canConvert (input) {
+  function canConvert(input) {
     return (
       input != null && (
         typeof input === 'string' ||
@@ -968,6 +1119,9 @@ var TurndownService = (function () {
       )
     )
   }
+
+  // Save the original turndown method
+  var originalTurndown = TurndownService.prototype.turndown;
 
   return TurndownService;
 
