@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Feishu Doc Exporter",
   "version": "0.1.0",
-  "description": "Extracts content from Feishu Docs pages and converts it to Markdown.",
+  "description": "提取飞书文档页面的内容并将其转换为 Markdown 格式。",
   "permissions": [
     "activeTab",
     "scripting"
