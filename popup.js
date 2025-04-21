@@ -1,33 +1,42 @@
-document.getElementById('convertButton').addEventListener('click', () => {
-  const statusDiv = document.getElementById('status');
-  statusDiv.textContent = 'Processing...';
+document.getElementById('extractBtn').addEventListener('click', () => {
+    const outputArea = document.getElementById('output');
+    outputArea.value = 'Extracting...';
 
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    if (tabs.length === 0) {
-        statusDiv.textContent = 'Error: No active tab found.';
-        return;
-    }
-    const activeTab = tabs[0];
-    if (!activeTab.id) {
-        statusDiv.textContent = 'Error: Active tab has no ID.';
-        return;
-    }
+    // Query the active tab
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs.length === 0) {
+            outputArea.value = 'Error: No active tab found.';
+            return;
+        }
+        const activeTab = tabs[0];
 
-    // Send message to content script in the active tab
-    chrome.tabs.sendMessage(activeTab.id, { action: "getHtmlContent" }, (response) => {
-      if (chrome.runtime.lastError) {
-        // Handle errors, e.g., content script not injected or communication failed
-        statusDiv.textContent = `Error: ${chrome.runtime.lastError.message}`;
-        console.error(chrome.runtime.lastError.message);
-      } else if (response && response.success) {
-        statusDiv.textContent = 'Copied to clipboard!';
-        // Optionally close the popup after a short delay
-        setTimeout(() => window.close(), 1500);
-      } else if (response) {
-        statusDiv.textContent = `Failed: ${response.error || 'Unknown error'}`;
-      } else {
-         statusDiv.textContent = 'No response received.'; // Or handle as needed
-      }
+        // Check if the tab URL matches the Feishu Docs pattern
+        if (!activeTab.url || !activeTab.url.includes('feishu.cn/')) {
+             outputArea.value = 'Error: Not a Feishu Docs page.\nPlease navigate to a feishu.cn/... URL.';
+             return;
+        }
+
+        // Send a message to the content script to start the scroll and extract process
+        chrome.tabs.sendMessage(activeTab.id, { action: "scrollToBottomAndExtract" }, (response) => {
+            if (chrome.runtime.lastError) {
+                // Handle errors, e.g., content script not injected or page not ready
+                outputArea.value = `Error: ${chrome.runtime.lastError.message}\nTry reloading the Feishu page and clicking Extract again.`;
+                console.error(chrome.runtime.lastError.message);
+            } else if (response && response.markdown) {
+                outputArea.value = response.markdown;
+            } else if (response && response.error) {
+                 outputArea.value = `错误: ${response.error}`;
+            } else {
+                outputArea.value = '错误：内容脚本无响应或响应格式意外。';
+            }
+        });
     });
-  });
+});
+
+// Optional: Clear placeholder on focus
+const outputArea = document.getElementById('output');
+outputArea.addEventListener('focus', () => {
+    if (outputArea.value === 'Extracted Markdown will appear here...' || outputArea.value === 'Extracting...') {
+        // Optionally clear or select text
+    }
 });

@@ -1,16 +1,29 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>HTML to Markdown</title>
-  <style>
-    body { width: 200px; padding: 10px; font-family: sans-serif; }
-    button { width: 100%; padding: 8px; }
-    #status { margin-top: 10px; font-size: 0.9em; text-align: center; }
-  </style>
+    <title>Feishu Doc Exporter</title>
+    <meta charset="UTF-8">
+    <style>
+        body {
+            width: 350px;
+            font-family: sans-serif;
+            padding: 10px;
+        }
+        textarea {
+            width: 95%;
+            height: 200px;
+            margin-top: 10px;
+        }
+        button {
+            padding: 8px 15px;
+            cursor: pointer;
+        }
+    </style>
 </head>
 <body>
-  <button id="convertButton">Convert & Copy</button>
-  <div id="status"></div>
-  <script src="popup.js"></script>
+    <h3>Feishu Doc to Markdown</h3>
+    <button id="extractBtn">Extract Content</button>
+    <textarea id="output" placeholder="Extracted Markdown will appear here..."></textarea>
+    <script src="popup.js"></script>
 </body>
 </html>
